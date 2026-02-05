@@ -1,0 +1,243 @@
+[
+  {
+    "inputs": [],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "name": "jobId", "type": "uint256"},
+      {"indexed": true, "name": "client", "type": "address"}
+    ],
+    "name": "JobCancelled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "name": "jobId", "type": "uint256"},
+      {"indexed": true, "name": "worker", "type": "address"},
+      {"indexed": false, "name": "stake", "type": "uint256"}
+    ],
+    "name": "JobClaimed",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "name": "jobId", "type": "uint256"},
+      {"indexed": true, "name": "worker", "type": "address"},
+      {"indexed": false, "name": "payout", "type": "uint256"}
+    ],
+    "name": "JobCompleted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "name": "jobId", "type": "uint256"},
+      {"indexed": true, "name": "client", "type": "address"}
+    ],
+    "name": "JobDisputed",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "name": "jobId", "type": "uint256"},
+      {"indexed": true, "name": "client", "type": "address"},
+      {"indexed": false, "name": "payment", "type": "uint256"},
+      {"indexed": false, "name": "deadline", "type": "uint256"}
+    ],
+    "name": "JobPosted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "name": "jobId", "type": "uint256"},
+      {"indexed": true, "name": "worker", "type": "address"}
+    ],
+    "name": "JobSubmitted",
+    "type": "event"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "approveResult",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "autoApprove",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "cancelJob",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "claimExpired",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "claimJob",
+    "outputs": [],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "disputeResult",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_agent", "type": "address"}],
+    "name": "getAgentClaimedJobs",
+    "outputs": [{"name": "", "type": "uint256[]"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_agent", "type": "address"}],
+    "name": "getAgentPostedJobs",
+    "outputs": [{"name": "", "type": "uint256[]"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_agent", "type": "address"}],
+    "name": "getAgentStats",
+    "outputs": [
+      {"name": "jobsPosted", "type": "uint256"},
+      {"name": "jobsCompleted", "type": "uint256"},
+      {"name": "jobsFailed", "type": "uint256"},
+      {"name": "totalEarned", "type": "uint256"},
+      {"name": "totalSpent", "type": "uint256"},
+      {"name": "reputation", "type": "uint256"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "getJobCore",
+    "outputs": [
+      {"name": "id", "type": "uint256"},
+      {"name": "client", "type": "address"},
+      {"name": "worker", "type": "address"},
+      {"name": "category", "type": "uint8"},
+      {"name": "status", "type": "uint8"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "getJobPayment",
+    "outputs": [
+      {"name": "payment", "type": "uint256"},
+      {"name": "stakeRequired", "type": "uint256"},
+      {"name": "workerStake", "type": "uint256"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "getJobTiming",
+    "outputs": [
+      {"name": "createdAt", "type": "uint256"},
+      {"name": "deadline", "type": "uint256"},
+      {"name": "submittedAt", "type": "uint256"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "getJobDescription",
+    "outputs": [{"name": "", "type": "string"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "getJobResult",
+    "outputs": [{"name": "", "type": "string"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_jobId", "type": "uint256"}],
+    "name": "isJobOpen",
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "jobCounter",
+    "outputs": [{"name": "", "type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {"name": "_description", "type": "string"},
+      {"name": "_category", "type": "uint8"},
+      {"name": "_deadlineHours", "type": "uint256"}
+    ],
+    "name": "postJob",
+    "outputs": [{"name": "", "type": "uint256"}],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {"name": "_jobId", "type": "uint256"},
+      {"name": "_resultHash", "type": "string"}
+    ],
+    "name": "submitResult",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalPayouts",
+    "outputs": [{"name": "", "type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"name": "_newRecipient", "type": "address"}],
+    "name": "setFeeRecipient",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {"name": "_jobId", "type": "uint256"},
+      {"name": "_workerWins", "type": "bool"}
+    ],
+    "name": "resolveDispute",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
