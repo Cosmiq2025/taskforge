@@ -245,8 +245,21 @@ async function postTask() {
     btn.disabled = true;
     btn.textContent = 'Confirming...';
     
-    try {
-        const tx = await contract.postJob(desc, cat, deadline, { value: ethers.parseEther(pay.toString()) });
+   try {
+        // 1. Check if the user is on the correct network (Chain ID 143 for Monad Mainnet)
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const network = await provider.getNetwork();
+        if (network.chainId !== 143n) {
+            alert("Please switch your wallet to Monad Mainnet!");
+            return;
+        }
+
+        // 2. Post the job with a manual gas limit to prevent RPC errors
+        const tx = await contract.postJob(desc, cat, deadline, { 
+            value: ethers.parseEther(pay.toString()),
+            gasLimit: 1000000 // <--- THIS IS THE LINE TO ADD
+        });
+        
         btn.textContent = 'Processing...';
         await tx.wait();
         
@@ -273,7 +286,7 @@ async function approveTask(taskId) {
     }
     
     try {
-        const tx = await contract.approveResult(taskId);
+const tx = await contract.approveResult(taskId, { gasLimit: 500000 });
         await tx.wait();
         addActivity('💰 Task #' + taskId + ' paid!');
         closeModal('taskModal');
