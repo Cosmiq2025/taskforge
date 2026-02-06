@@ -250,8 +250,36 @@ async function postTask() {
         const provider = new ethers.BrowserProvider(window.ethereum);
         const network = await provider.getNetwork();
         if (network.chainId !== 143n) {
-            alert("Please switch your wallet to Monad Mainnet!");
-            return;
+            try {
+                // This triggers the MetaMask popup to switch networks
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: '0x8f' }], // 0x8f is 143 in hex
+                });
+                // After switching, the function should stop so the user can click 'Submit' again on the right chain
+                return; 
+            } catch (switchError) {
+                // Error 4902 means the network isn't in their MetaMask yet
+                if (switchError.code === 4902) {
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: '0x8f',
+                                chainName: 'Monad Mainnet',
+                                nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
+                                rpcUrls: ['https://rpc.monad.xyz'],
+                                blockExplorerUrls: ['https://monadscan.xyz']
+                            }]
+                        });
+                    } catch (addError) {
+                        console.error('Failed to add network:', addError);
+                    }
+                } else {
+                    alert("Please switch your wallet to Monad Mainnet manually.");
+                }
+                return;
+            }
         }
 
         // 2. Post the job with a manual gas limit to prevent RPC errors
