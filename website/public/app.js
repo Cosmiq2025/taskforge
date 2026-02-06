@@ -144,8 +144,15 @@ async function loadTasks(category = 'all') {
         let tasks = data.jobs;
         
         // --- FIXED FILTER LOGIC ---
-        if (category === 'all') {
-            tasks = data.jobs; // Shows Status 0, 1, 2, and 3
+      // Change this in your app.js
+if (category === 'all' || category === '') {
+    tasks = data.jobs; 
+} else if (category === 'completed') {
+    tasks = data.jobs.filter(j => j.status === 2 || j.status === 3);
+} else {
+    tasks = data.jobs.filter(j => j.category === parseInt(category));
+}
+
         } else if (category === 'completed') {
             tasks = data.jobs.filter(j => j.status === 2 || j.status === 3);
         } else {
