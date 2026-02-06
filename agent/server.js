@@ -1,9 +1,3 @@
-/**
- * API Server - Agent Jobs Protocol
- * REST API + WebSocket for real-time updates
- * Supports ALL EVM wallets (not just MetaMask)
- */
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -87,6 +81,16 @@ function broadcast(event, data) {
 // API ROUTES
 // ============================================
 
+// NEW: Config endpoint for contract address
+app.get('/api/config', (req, res) => {
+    res.json({
+        success: true,
+        contractAddress: CONTRACT_ADDRESS,
+        rpcUrl: RPC_URL,
+        hasOpenAI: hasOpenAI
+    });
+});
+
 // Get open jobs
 app.get('/api/jobs', async (req, res) => {
     try {
@@ -94,17 +98,7 @@ app.get('/api/jobs', async (req, res) => {
         const jobs = await contractService.getOpenJobs(limit);
         res.json({ success: true, jobs });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Get ALL jobs (including completed)
-app.get('/api/jobs/all', async (req, res) => {
-    try {
-        const limit = parseInt(req.query.limit) || 50;
-        const jobs = await contractService.getAllJobs(limit);
-        res.json({ success: true, jobs });
-    } catch (error) {
+        console.error('Get jobs error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -113,46 +107,45 @@ app.get('/api/jobs/all', async (req, res) => {
 app.get('/api/jobs/:id', async (req, res) => {
     try {
         const job = await contractService.getJob(parseInt(req.params.id));
-        if (!job) {
+        if (!job || job.id === 0) {
             return res.status(404).json({ success: false, error: 'Job not found' });
         }
         res.json({ success: true, job });
     } catch (error) {
+        console.error('Get job error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// Post new job (for server-side posting, not MetaMask)
-app.post('/api/jobs', async (req, res) => {
-    try {
-        const { description, category, payment, deadlineHours } = req.body;
-        
-        if (!description || payment === undefined) {
-            return res.status(400).json({ success: false, error: 'Missing required fields' });
-        }
-        
-        const result = await contractService.postJob(
-            description,
-            category || 0,
-            payment,
-            deadlineHours || 24
-        );
-        
-        broadcast('job_posted', { jobId: result.jobId, txHash: result.txHash });
-        
-        res.json({ success: true, ...result });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Get protocol stats
+// Get protocol stats (FIXED: includes contract address)
 app.get('/api/stats', async (req, res) => {
     try {
-        const stats = await contractService.getStats();
-        stats.workerAddress = contractService.wallet.address;
-        res.json({ success: true, stats });
+        const jobCounter = await contractService.getJobCounter();
+        const totalPayouts = await contractService.getTotalPayouts();
+        
+        // Count open jobs
+        let openJobs = 0;
+        for (let i = 1; i <= jobCounter; i++) {
+            try {
+                const isOpen = await contractService.contract.isJobOpen(i);
+                if (isOpen) openJobs++;
+            } catch (e) {
+                // Skip invalid jobs
+            }
+        }
+        
+        res.json({
+            success: true,
+            stats: {
+                totalJobs: jobCounter,
+                openJobs: openJobs,
+                totalPayouts: totalPayouts,
+                contractAddress: CONTRACT_ADDRESS, // ADDED THIS
+                workerAddress: contractService.wallet.address
+            }
+        });
     } catch (error) {
+        console.error('Get stats error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -163,17 +156,7 @@ app.get('/api/agents/:address', async (req, res) => {
         const stats = await contractService.getAgentStats(req.params.address);
         res.json({ success: true, stats });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Get recent activity
-app.get('/api/activity', async (req, res) => {
-    try {
-        const limit = parseInt(req.query.limit) || 20;
-        const activity = await contractService.getRecentActivity(limit);
-        res.json({ success: true, activity });
-    } catch (error) {
+        console.error('Get agent stats error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -199,6 +182,7 @@ app.get('/api/worker/status', async (req, res) => {
             }
         });
     } catch (error) {
+        console.error('Worker status error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -209,7 +193,6 @@ app.post('/api/worker/start', async (req, res) => {
             return res.json({ success: true, message: 'Worker already running' });
         }
         
-        // Pass RPC_URL to worker for blockchain data fetching
         workerAgent = new WorkerAgent(contractService, OPENAI_API_KEY, RPC_URL);
         
         // Set up event handlers
@@ -230,6 +213,7 @@ app.post('/api/worker/start', async (req, res) => {
         
         res.json({ success: true, message: 'Worker started' });
     } catch (error) {
+        console.error('Worker start error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -242,18 +226,18 @@ app.post('/api/worker/stop', async (req, res) => {
         }
         res.json({ success: true, message: 'Worker stopped' });
     } catch (error) {
+        console.error('Worker stop error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
 // ============================================
-// BLOCKCHAIN DATA API (for direct queries)
+// BLOCKCHAIN DATA API
 // ============================================
 
 const BlockchainService = require('./blockchainService');
 const blockchainService = new BlockchainService(RPC_URL);
 
-// Get wallet balance
 app.get('/api/blockchain/balance/:address', async (req, res) => {
     try {
         const result = await blockchainService.getBalance(req.params.address);
@@ -263,7 +247,6 @@ app.get('/api/blockchain/balance/:address', async (req, res) => {
     }
 });
 
-// Analyze wallet
 app.get('/api/blockchain/analyze/:address', async (req, res) => {
     try {
         const result = await blockchainService.analyzeWallet(req.params.address);
@@ -273,7 +256,6 @@ app.get('/api/blockchain/analyze/:address', async (req, res) => {
     }
 });
 
-// Get network info
 app.get('/api/blockchain/network', async (req, res) => {
     try {
         const result = await blockchainService.getNetworkInfo();
@@ -283,7 +265,6 @@ app.get('/api/blockchain/network', async (req, res) => {
     }
 });
 
-// Get chain comparison
 app.get('/api/blockchain/compare', async (req, res) => {
     try {
         const result = await blockchainService.getChainComparison();
@@ -297,7 +278,6 @@ app.get('/api/blockchain/compare', async (req, res) => {
 // SERVE FRONTEND
 // ============================================
 
-// Serve index.html for all other routes (SPA support)
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../website/public/index.html'));
 });

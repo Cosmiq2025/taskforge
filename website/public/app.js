@@ -1,7 +1,3 @@
-/**
- * TaskForge v3 - Frontend Application
- * Agent auto-starts, no manual control needed for users
- */
 
 const CONTRACT_ABI = [
     {
@@ -27,6 +23,7 @@ let contractAddress = null;
 document.addEventListener('DOMContentLoaded', async () => {
     setupNavigation();
     setupEventListeners();
+    await loadContractAddress(); // Load contract address FIRST
     await loadStats();
     await loadTasks();
     await loadAgentStatus();
@@ -36,6 +33,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Auto-start agent (server-side)
     fetch('/api/worker/start', { method: 'POST' }).catch(() => {});
 });
+
+async function loadContractAddress() {
+    try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        if (data.success && data.stats) {
+            // Try to get contract address from stats
+            contractAddress = data.stats.contractAddress || process.env.CONTRACT_ADDRESS;
+            
+            // If still not available, try to get from environment
+            if (!contractAddress) {
+                const configRes = await fetch('/api/config');
+                if (configRes.ok) {
+                    const configData = await configRes.json();
+                    contractAddress = configData.contractAddress;
+                }
+            }
+            
+            console.log('Contract address loaded:', contractAddress);
+        }
+    } catch (err) {
+        console.error('Failed to load contract address:', err);
+    }
+}
 
 function setupNavigation() {
     document.querySelectorAll('.nav-link').forEach(link => {
@@ -72,9 +93,14 @@ async function connectWallet() {
         const provider = new ethers.BrowserProvider(window.ethereum);
         const signer = await provider.getSigner();
         
-        const res = await fetch('/api/stats');
-        const data = await res.json();
-        contractAddress = data.stats.contractAddress;
+        // Make sure we have contract address
+        if (!contractAddress) {
+            await loadContractAddress();
+        }
+        
+        if (!contractAddress) {
+            throw new Error('Contract address not available');
+        }
         
         contract = new ethers.Contract(contractAddress, CONTRACT_ABI, signer);
         
@@ -97,6 +123,7 @@ async function connectWallet() {
         
     } catch (err) {
         console.error('Connect failed:', err);
+        alert('Failed to connect wallet: ' + err.message);
         btn.textContent = 'Connect Wallet';
         btn.disabled = false;
     }
@@ -137,6 +164,7 @@ async function loadTasks(category = 'all') {
             </div>
         `).join('');
     } catch (err) {
+        console.error('Load tasks failed:', err);
         list.innerHTML = '<div class="loading">Failed to load</div>';
     }
 }
@@ -198,13 +226,18 @@ async function postTask() {
         return;
     }
     
+    if (!contract) {
+        alert('Please connect your wallet first');
+        return;
+    }
+    
     const desc = document.getElementById('taskDescription').value.trim();
     const cat = parseInt(document.getElementById('taskCategory').value);
     const pay = document.getElementById('taskPayment').value;
     const deadline = parseInt(document.getElementById('taskDeadline').value);
     
     if (!desc || desc.length < 10) {
-        alert('Please provide a clear task description');
+        alert('Please provide a clear task description (at least 10 characters)');
         return;
     }
     
@@ -223,7 +256,10 @@ async function postTask() {
         loadTasks();
         loadStats();
     } catch (err) {
-        if (err.code !== 'ACTION_REJECTED') alert('Failed: ' + (err.reason || err.message));
+        console.error('Post task error:', err);
+        if (err.code !== 'ACTION_REJECTED') {
+            alert('Failed: ' + (err.reason || err.message));
+        }
     } finally {
         btn.disabled = false;
         btn.textContent = 'Submit Task & Pay ' + pay + ' MON';
@@ -231,7 +267,11 @@ async function postTask() {
 }
 
 async function approveTask(taskId) {
-    if (!wallet) return;
+    if (!wallet || !contract) {
+        alert('Please connect your wallet first');
+        return;
+    }
+    
     try {
         const tx = await contract.approveResult(taskId);
         await tx.wait();
@@ -240,6 +280,7 @@ async function approveTask(taskId) {
         loadTasks();
         loadStats();
     } catch (err) {
+        console.error('Approve error:', err);
         alert('Failed: ' + (err.reason || err.message));
     }
 }
@@ -260,10 +301,12 @@ async function loadStats() {
             const link = document.getElementById('contractLink');
             if (link && s.contractAddress) {
                 link.href = 'https://explorer.monad.xyz/address/' + s.contractAddress;
+                contractAddress = s.contractAddress;
             }
-            contractAddress = s.contractAddress;
         }
-    } catch (err) {}
+    } catch (err) {
+        console.error('Load stats failed:', err);
+    }
 }
 
 async function loadAgentStatus() {
@@ -291,7 +334,9 @@ async function loadAgentStatus() {
             
             document.getElementById('agentActiveTasks').textContent = (s.activeJobs || 0) + ' tasks';
         }
-    } catch (err) {}
+    } catch (err) {
+        console.error('Load agent status failed:', err);
+    }
 }
 
 function setupWebSocket() {
@@ -320,11 +365,14 @@ function setupWebSocket() {
         }
     };
     
+    ws.onerror = (err) => console.error('WebSocket error:', err);
     ws.onclose = () => setTimeout(setupWebSocket, 3000);
 }
 
 function addActivity(msg) {
     const feed = document.getElementById('activityFeed');
+    if (!feed) return;
+    
     const empty = feed.querySelector('.muted');
     if (empty) empty.remove();
     
@@ -337,24 +385,36 @@ function addActivity(msg) {
 }
 
 function setupEventListeners() {
-    document.getElementById('connectWallet').addEventListener('click', connectWallet);
+    const connectBtn = document.getElementById('connectWallet');
+    if (connectBtn) connectBtn.addEventListener('click', connectWallet);
     
-    document.getElementById('postTaskBtn').addEventListener('click', () => {
-        document.getElementById('walletWarning').style.display = wallet ? 'none' : 'block';
-        openModal('postTaskModal');
-    });
+    const postTaskBtn = document.getElementById('postTaskBtn');
+    if (postTaskBtn) {
+        postTaskBtn.addEventListener('click', () => {
+            document.getElementById('walletWarning').style.display = wallet ? 'none' : 'block';
+            openModal('postTaskModal');
+        });
+    }
     
-    document.getElementById('heroPostTask').addEventListener('click', async () => {
-        if (!wallet) await connectWallet();
-        document.getElementById('walletWarning').style.display = wallet ? 'none' : 'block';
-        openModal('postTaskModal');
-    });
+    const heroPostTask = document.getElementById('heroPostTask');
+    if (heroPostTask) {
+        heroPostTask.addEventListener('click', async () => {
+            if (!wallet) await connectWallet();
+            document.getElementById('walletWarning').style.display = wallet ? 'none' : 'block';
+            openModal('postTaskModal');
+        });
+    }
     
-    document.getElementById('submitTask').addEventListener('click', postTask);
+    const submitTask = document.getElementById('submitTask');
+    if (submitTask) submitTask.addEventListener('click', postTask);
     
-    document.getElementById('taskPayment').addEventListener('input', (e) => {
-        document.getElementById('payAmount').textContent = e.target.value;
-    });
+    const taskPayment = document.getElementById('taskPayment');
+    if (taskPayment) {
+        taskPayment.addEventListener('input', (e) => {
+            const payAmount = document.getElementById('payAmount');
+            if (payAmount) payAmount.textContent = e.target.value;
+        });
+    }
     
     document.querySelectorAll('.filter-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -376,13 +436,19 @@ function setupEventListeners() {
 }
 
 function openModal(id) {
-    document.getElementById(id).style.display = 'block';
-    document.body.style.overflow = 'hidden';
+    const modal = document.getElementById(id);
+    if (modal) {
+        modal.style.display = 'block';
+        document.body.style.overflow = 'hidden';
+    }
 }
 
 function closeModal(id) {
-    document.getElementById(id).style.display = 'none';
-    document.body.style.overflow = '';
+    const modal = document.getElementById(id);
+    if (modal) {
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+    }
 }
 
 function formatAddr(addr) { return addr ? addr.slice(0,6) + '...' + addr.slice(-4) : '-'; }
