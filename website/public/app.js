@@ -142,8 +142,13 @@ async function loadTasks(category = 'all') {
         }
         
         let tasks = data.jobs;
-        if (category !== 'all') tasks = tasks.filter(j => j.category === parseInt(category));
-        
+if (category === 'all') {
+    // Show everything
+} else if (category === 'completed') {
+    tasks = tasks.filter(j => j.status === 2 || j.status === 3);
+} else {
+    tasks = tasks.filter(j => j.category === parseInt(category));
+}        
         if (!tasks.length) {
             list.innerHTML = '<div class="empty-state"><p>No tasks in this category</p></div>';
             return;
@@ -189,13 +194,24 @@ async function showTask(taskId) {
         document.getElementById('modalStake').textContent = task.stakeRequired + ' MON';
         
         const resultDiv = document.getElementById('modalResult');
-        if (task.resultHash && task.resultHash.length > 0) {
+        
+        // Show result box if status is 2 (Submitted) or 3 (Completed)
+        if (task.status >= 2 || (task.resultHash && task.resultHash.length > 0)) {
             resultDiv.style.display = 'block';
+            
             let displayResult = task.resultHash;
+            
+            if (!displayResult || displayResult.length < 5) {
+                displayResult = "✨ Agent has submitted work. Fetching report from blockchain...";
+            }
+
             try {
                 const parsed = JSON.parse(task.resultHash);
                 displayResult = parsed.content || parsed.report || JSON.stringify(parsed, null, 2);
-            } catch (e) {}
+            } catch (e) {
+                // If not JSON, just show the raw string
+            }
+            
             document.getElementById('modalResultText').textContent = displayResult;
         } else {
             resultDiv.style.display = 'none';
@@ -204,21 +220,29 @@ async function showTask(taskId) {
         const actions = document.getElementById('modalActions');
         actions.innerHTML = '';
         
+        // Status 2 is the "Sweet Spot" where work is done but money hasn't moved yet
         if (wallet && task.status === 2 && task.client.toLowerCase() === wallet.toLowerCase()) {
-            actions.innerHTML = '<button class="btn btn-success btn-full" onclick="approveTask(' + task.id + ')">✓ Approve & Release Payment</button>';
+            actions.innerHTML = `
+                <div style="background: rgba(0, 255, 157, 0.05); border: 1px solid var(--green); padding: 15px; border-radius: 8px; margin-top: 15px;">
+                    <p style="color: var(--green); font-size: 0.9rem; margin-bottom: 10px; font-weight: bold;">✅ Agent work is ready for approval</p>
+                    <button class="btn btn-success btn-full" onclick="approveTask(${task.id})">✓ Approve & Release 0.1 MON</button>
+                </div>
+            `;
         } else if (task.status === 0) {
             actions.innerHTML = '<p class="muted small">⏳ Waiting for Forge Agent to claim...</p>';
         } else if (task.status === 1) {
             actions.innerHTML = '<p class="muted small">🤖 Forge Agent is processing...</p>';
         } else if (task.status === 3) {
-            actions.innerHTML = '<p class="muted small" style="color:var(--green)">✓ Completed & Paid</p>';
+            actions.innerHTML = '<p class="muted small" style="color:var(--green)">✓ Task Completed & Funds Released</p>';
         }
         
         openModal('taskModal');
     } catch (err) {
         console.error('Load task failed:', err);
     }
-}
+} // <--- MAKE SURE THIS IS HERE TO CLOSE showTask
+
+
 
 async function postTask() {
     if (!wallet) {
