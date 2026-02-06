@@ -142,13 +142,16 @@ async function loadTasks(category = 'all') {
         }
         
         let tasks = data.jobs;
-if (category === 'all') {
-    // Show everything
-} else if (category === 'completed') {
-    tasks = tasks.filter(j => j.status === 2 || j.status === 3);
-} else {
-    tasks = tasks.filter(j => j.category === parseInt(category));
-}        
+        
+        // --- FIXED FILTER LOGIC ---
+        if (category === 'all') {
+            tasks = data.jobs; // Shows Status 0, 1, 2, and 3
+        } else if (category === 'completed') {
+            tasks = data.jobs.filter(j => j.status === 2 || j.status === 3);
+        } else {
+            tasks = data.jobs.filter(j => j.category === parseInt(category));
+        }
+        
         if (!tasks.length) {
             list.innerHTML = '<div class="empty-state"><p>No tasks in this category</p></div>';
             return;
