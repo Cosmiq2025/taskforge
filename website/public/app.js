@@ -74,6 +74,21 @@ async function checkWallet() {
         if (accounts.length > 0) connectWallet();
     }
 }
+function disconnectWallet() {
+    wallet = null;
+    contract = null;
+    
+    const btn = document.getElementById('connectWallet');
+    btn.textContent = 'Connect Wallet';
+    btn.classList.remove('connected');
+    btn.disabled = false;
+    
+    document.getElementById('walletWarning').style.display = 'none';
+    addActivity('🔌 Wallet disconnected');
+    
+    // Refresh tasks to show the public/all view
+    loadTasks();
+}
 
 async function connectWallet() {
     if (!window.ethereum) {
@@ -454,7 +469,20 @@ function addActivity(msg) {
 
 function setupEventListeners() {
     const connectBtn = document.getElementById('connectWallet');
-    if (connectBtn) connectBtn.addEventListener('click', connectWallet);
+    if (connectBtn) {
+        connectBtn.addEventListener('click', () => {
+            // IF WALLET EXISTS, DISCONNECT. OTHERWISE, CONNECT.
+            if (wallet) {
+                if (confirm('Disconnect wallet?')) {
+                    disconnectWallet();
+                }
+            } else {
+                connectWallet();
+            }
+        });
+    }
+    
+    // ... keep the rest of your listeners (postTaskBtn, submitTask, etc.) exactly as they are
     
     const postTaskBtn = document.getElementById('postTaskBtn');
     if (postTaskBtn) {
