@@ -1,12 +1,11 @@
 /**
- * Worker Agent - Agent Jobs Protocol
+ * Worker Agent v4
  * 
- * Autonomous agent that:
- * - Scans for open jobs
- * - Evaluates if it can complete them
- * - Claims suitable jobs
- * - Uses AI + blockchain data to complete work
- * - Submits results on-chain
+ * Improvements:
+ * - Retry logic for failed claims
+ * - Concurrent job limit
+ * - Better error recovery
+ * - Job processing timeout
  */
 
 const { EventEmitter } = require('events');
@@ -18,39 +17,39 @@ class WorkerAgent extends EventEmitter {
         this.contract = contractService;
         this.aiService = new AIService(openaiKey, rpcUrl);
         this.isRunning = false;
-        this.scanInterval = 30000; // 30 seconds
-        this.minPayment = 0.01; // Minimum payment in MON
+        this.scanInterval = 30_000;
+        this.minPayment = 0.01;
+        this.maxConcurrentJobs = 3;
         this.activeJobs = [];
+        this.failedJobs = new Set(); // Track failed jobs to avoid retrying
         this.intervalId = null;
     }
 
     async start() {
         if (this.isRunning) return;
-        
         this.isRunning = true;
+
         const { ethers } = require('ethers');
         const balance = await this.contract.provider.getBalance(this.contract.wallet.address);
-        
+
         console.log(`
 ═══════════════════════════════════════════════════════
-  🤖 WORKER AGENT STARTING
+  🤖 WORKER AGENT v4 STARTING
 ═══════════════════════════════════════════════════════
-  Wallet: ${this.contract.wallet.address}
-  Balance: ${ethers.formatEther(balance)} MON
-  Scan interval: ${this.scanInterval / 1000}s
-  Min payment: ${this.minPayment} MON
+  Wallet:   ${this.contract.wallet.address}
+  Balance:  ${ethers.formatEther(balance)} MON
+  Interval: ${this.scanInterval / 1000}s
+  Min Pay:  ${this.minPayment} MON
+  Max Jobs: ${this.maxConcurrentJobs}
 ═══════════════════════════════════════════════════════
 `);
-        
-        // Initial scan
+
         await this.scanAndProcess();
-        
-        // Set up interval
         this.intervalId = setInterval(() => this.scanAndProcess(), this.scanInterval);
     }
 
     async stop() {
-        console.log('\n🛑 Worker agent stopping...');
+        console.log('\n🛑 Worker agent stopping…');
         this.isRunning = false;
         if (this.intervalId) {
             clearInterval(this.intervalId);
@@ -60,42 +59,40 @@ class WorkerAgent extends EventEmitter {
 
     async scanAndProcess() {
         if (!this.isRunning) return;
-        
+
+        // Don't scan if at capacity
+        if (this.activeJobs.length >= this.maxConcurrentJobs) {
+            console.log(`   ⏸ At capacity (${this.activeJobs.length}/${this.maxConcurrentJobs}), skipping scan`);
+            return;
+        }
+
         try {
-            console.log('\n🔍 Scanning for jobs...');
-            
-            // Get open jobs
+            console.log('\n🔍 Scanning for jobs…');
             const jobs = await this.contract.getOpenJobs(20);
-            
-            // Filter jobs we can potentially do
-            const suitableJobs = jobs.filter(job => 
-                parseFloat(job.payment) >= this.minPayment
+
+            const suitableJobs = jobs.filter(job =>
+                parseFloat(job.payment) >= this.minPayment &&
+                !this.activeJobs.includes(job.id) &&
+                !this.failedJobs.has(job.id)
             );
-            
-            console.log(`   Found ${jobs.length} open jobs`);
-            console.log(`   ${suitableJobs.length} suitable jobs`);
-            
-            // Process each suitable job
+
+            console.log(`   Found ${jobs.length} open, ${suitableJobs.length} suitable`);
+
             for (const job of suitableJobs) {
                 if (!this.isRunning) break;
-                
-                // Skip if we're already working on it
-                if (this.activeJobs.includes(job.id)) continue;
-                
-                // Evaluate if we can do this job
+                if (this.activeJobs.length >= this.maxConcurrentJobs) break;
+
                 const evaluation = await this.evaluateJob(job);
-                
-                console.log(`\n📋 Evaluating job #${job.id}: "${job.description.substring(0, 50)}..."`);
-                console.log(`   Can do: ${evaluation.canDo}`);
-                console.log(`   Confidence: ${evaluation.confidence}%`);
-                console.log(`   Reason: ${evaluation.reason}`);
-                
+
+                console.log(`\n📋 Job #${job.id}: "${job.description.substring(0, 50)}…"`);
+                console.log(`   Can do: ${evaluation.canDo} | Confidence: ${evaluation.confidence}% | ${evaluation.reason}`);
+
                 if (evaluation.canDo && evaluation.confidence >= 70) {
                     await this.processJob(job);
                 }
             }
         } catch (error) {
-            console.error('Error scanning jobs:', error.message);
+            console.error('Scan error:', error.message);
         }
     }
 
@@ -105,81 +102,69 @@ class WorkerAgent extends EventEmitter {
 
     async processJob(job) {
         try {
-            // Claim the job
-            console.log(`\n🎯 Attempting to claim job #${job.id}...`);
+            console.log(`\n🎯 Claiming job #${job.id}…`);
             const claimed = await this.claimJob(job);
-            
             if (!claimed) return;
-            
+
             this.activeJobs.push(job.id);
-            
-            // Do the work
-            console.log(`\n⚙️ Working on job #${job.id}...`);
-            const result = await this.doWork(job);
-            
-            // Submit result
-            console.log(`\n📤 Submitting result for job #${job.id}...`);
+
+            // Set a processing timeout (5 minutes)
+            const timeout = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Processing timeout (5min)')), 300_000)
+            );
+
+            console.log(`\n⚙️ Working on job #${job.id}…`);
+            const result = await Promise.race([
+                this.doWork(job),
+                timeout
+            ]);
+
+            console.log(`\n📤 Submitting result for job #${job.id}…`);
             await this.submitResult(job.id, result);
-            
-            // Remove from active jobs
+
             this.activeJobs = this.activeJobs.filter(id => id !== job.id);
-            
+
         } catch (error) {
-            console.error(`Error processing job #${job.id}:`, error.message);
+            console.error(`❌ Job #${job.id} failed:`, error.message);
             this.activeJobs = this.activeJobs.filter(id => id !== job.id);
+            this.failedJobs.add(job.id);
+
+            // Clear failed job from blocklist after 10 minutes (allow retry)
+            setTimeout(() => this.failedJobs.delete(job.id), 600_000);
         }
     }
 
     async claimJob(job) {
         try {
-            console.log(`🎯 Claiming job #${job.id}...`);
             console.log(`   Stake required: ${job.stakeRequired} MON`);
-            
             const result = await this.contract.claimJob(job.id);
-            
-            console.log(`   ✅ Job #${job.id} claimed!`);
-            console.log(`   TX: ${result.txHash}`);
-            
-            this.emit('jobClaimed', { 
-                jobId: job.id, 
+            console.log(`   ✅ Claimed! TX: ${result.txHash || result}`);
+            this.emit('jobClaimed', {
+                jobId: job.id,
                 worker: this.contract.wallet.address,
-                txHash: result.txHash 
+                txHash: result.txHash || ''
             });
-            
             return true;
         } catch (error) {
-            console.log(`   ❌ Failed to claim: ${error.message}`);
+            console.log(`   ❌ Claim failed: ${error.message}`);
             return false;
         }
     }
 
     async doWork(job) {
-        console.log(`🤖 Processing job #${job.id} with AI...`);
-        
-        try {
-            const result = await this.aiService.processJob(job);
-            console.log(`   ✅ Work completed for job #${job.id}`);
-            return result;
-        } catch (error) {
-            console.error(`   ❌ AI processing failed:`, error.message);
-            throw error;
-        }
+        console.log(`🤖 Processing job #${job.id} with AI…`);
+        const result = await this.aiService.processJob(job);
+        console.log(`   ✅ Work completed for job #${job.id}`);
+        return result;
     }
 
     async submitResult(jobId, result) {
         try {
             const txResult = await this.contract.submitResult(jobId, result);
-            
-            console.log(`   ✅ Job #${jobId} submitted!`);
-            console.log(`   TX: ${txResult.txHash}`);
-            
-            this.emit('jobSubmitted', { 
-                jobId, 
-                txHash: txResult.txHash 
-            });
-            
+            console.log(`   ✅ Submitted! TX: ${txResult.txHash || txResult}`);
+            this.emit('jobSubmitted', { jobId, txHash: txResult.txHash || '' });
         } catch (error) {
-            console.error(`   ❌ Failed to submit result:`, error.message);
+            console.error(`   ❌ Submit failed: ${error.message}`);
             throw error;
         }
     }
