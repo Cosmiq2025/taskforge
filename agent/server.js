@@ -92,17 +92,32 @@ app.get('/api/config', (req, res) => {
 });
 
 // Get open jobs
+// Get ALL jobs (Fix for visibility)
 app.get('/api/jobs', async (req, res) => {
     try {
-        const limit = parseInt(req.query.limit) || 20;
-        const jobs = await contractService.getOpenJobs(limit);
+        const limit = parseInt(req.query.limit) || 50;
+        const jobCounter = await contractService.getJobCounter();
+        const jobs = [];
+        
+        // Fetch jobs starting from the most recent
+        const start = Math.max(1, jobCounter - limit + 1);
+        for (let i = jobCounter; i >= start; i--) {
+            try {
+                const job = await contractService.getJob(i);
+                if (job && job.id !== 0) {
+                    jobs.push(job);
+                }
+            } catch (e) {
+                console.error(`Error fetching job ${i}:`, e);
+            }
+        }
+        
         res.json({ success: true, jobs });
     } catch (error) {
         console.error('Get jobs error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
 // Get job by ID
 app.get('/api/jobs/:id', async (req, res) => {
     try {
