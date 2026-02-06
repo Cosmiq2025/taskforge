@@ -137,22 +137,15 @@ async function loadTasks(category = 'all') {
         const data = await res.json();
         
         if (!data.success || !data.jobs.length) {
-            list.innerHTML = '<div class="empty-state"><span class="icon">📭</span><p>No active tasks yet</p><button class="btn btn-primary btn-sm" onclick="openModal(\'postTaskModal\')" style="margin-top:1rem">+ Submit First Task</button></div>';
+            list.innerHTML = '<div class="empty-state"><span class="icon">📭</span><p>No active tasks yet</p></div>';
             return;
         }
         
         let tasks = data.jobs;
         
-        // --- FIXED FILTER LOGIC ---
-      // Change this in your app.js
-if (category === 'all' || category === '') {
-    tasks = data.jobs; 
-} else if (category === 'completed') {
-    tasks = data.jobs.filter(j => j.status === 2 || j.status === 3);
-} else {
-    tasks = data.jobs.filter(j => j.category === parseInt(category));
-}
-
+        // --- CLEAN FILTER LOGIC ---
+        if (category === 'all' || category === '') {
+            tasks = data.jobs; // Shows Status 0, 1, 2, and 3
         } else if (category === 'completed') {
             tasks = data.jobs.filter(j => j.status === 2 || j.status === 3);
         } else {
