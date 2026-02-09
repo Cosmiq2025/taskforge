@@ -1,15 +1,4 @@
-/**
- * DeFiLlama Service — Live DeFi Data (Free, no API key)
- *
- * Endpoints used:
- *   GET https://api.llama.fi/protocols             → all protocols
- *   GET https://api.llama.fi/protocol/{slug}        → single protocol detail
- *   GET https://api.llama.fi/v2/chains              → chain TVL rankings
- *   GET https://api.llama.fi/v2/historicalChainTvl/{chain} → chain TVL history
- *   GET https://yields.llama.fi/pools               → yield / APY data
- *   GET https://api.llama.fi/overview/dexs           → DEX volumes
- *   GET https://stablecoins.llama.fi/stablecoins     → stablecoin data
- */
+
 
 const https = require('https');
 
@@ -22,12 +11,15 @@ class DefiLlamaService {
         console.log('📊 DefiLlama service ready (free API, no key)');
     }
 
-    // ─── HTTP ────────────────────────────────────
 
     fetchJSON(url, timeoutMs = 15_000) {
         return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => { req.destroy(); reject(new Error(`Timeout: ${url}`)); }, timeoutMs);
-            const req = https.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
+            let req;  // ✅ FIX: Declare first
+            const timer = setTimeout(() => { 
+                if (req) req.destroy();  // ✅ FIX: Check if req exists
+                reject(new Error(`Timeout: ${url}`)); 
+            }, timeoutMs);
+            req = https.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
                 if (res.statusCode !== 200) { clearTimeout(timer); res.resume(); return reject(new Error(`HTTP ${res.statusCode}`)); }
                 let buf = '';
                 res.on('data', c => { buf += c; });
@@ -48,15 +40,10 @@ class DefiLlamaService {
 
     // ─── Protocols ───────────────────────────────
 
-    /** All protocols (cached 10 min — big list) */
     async getAllProtocols() {
         return this.cached('protocols', 600_000, () => this.fetchJSON(`${this.baseUrl}/protocols`));
     }
 
-    /**
-     * Search / filter protocols
-     * @param {object} opts - { query, chain, category, limit }
-     */
     async searchProtocols({ query = '', chain, category, limit = 15 } = {}) {
         try {
             const all = await this.getAllProtocols();
@@ -114,7 +101,6 @@ class DefiLlamaService {
         }
     }
 
-    /** Detailed data for one protocol (by slug) */
     async getProtocolDetail(slug) {
         try {
             const clean = String(slug).toLowerCase().replace(/[^a-z0-9\-_.]/g, '').slice(0, 100);
@@ -122,7 +108,6 @@ class DefiLlamaService {
                 this.fetchJSON(`${this.baseUrl}/protocol/${clean}`)
             );
 
-            // Chain TVL breakdown
             const chainTvls = {};
             if (data.chainTvls) {
                 for (const [ch, tvlArr] of Object.entries(data.chainTvls)) {
@@ -130,7 +115,6 @@ class DefiLlamaService {
                 }
             }
 
-            // Recent TVL history (30 days)
             const history = (data.tvl || []).slice(-30).map(p => ({
                 date: new Date(p.date * 1000).toISOString().split('T')[0],
                 tvl:  p.totalLiquidityUSD || 0
@@ -164,7 +148,6 @@ class DefiLlamaService {
 
     // ─── Chains ──────────────────────────────────
 
-    /** All chains ranked by TVL */
     async getChainsTVL() {
         return this.cached('chains', 300_000, async () => {
             try {
@@ -184,7 +167,6 @@ class DefiLlamaService {
         });
     }
 
-    /** Single chain TVL + 7d/30d change */
     async getChainTVL(chainName) {
         try {
             const data = await this.cached(`chain_${chainName}`, 300_000, () =>
@@ -197,7 +179,6 @@ class DefiLlamaService {
             const month    = data.length > 30 ? data[data.length - 31] : data[0];
             const pct = (a, b) => b > 0 ? ((a - b) / b * 100).toFixed(2) : '0';
 
-            // Also get rank
             const allChains = await this.getChainsTVL();
             const rank = allChains.ok
                 ? (allChains.chains.findIndex(c => c.name.toLowerCase() === chainName.toLowerCase()) + 1) || '—'
@@ -220,7 +201,6 @@ class DefiLlamaService {
 
     // ─── Yields ──────────────────────────────────
 
-    /** Yield pools, filterable by chain / project / stablecoin */
     async getYields({ chain, project, stableOnly = false, limit = 15 } = {}) {
         try {
             const data = await this.cached('yields', 180_000, () =>
@@ -233,7 +213,6 @@ class DefiLlamaService {
             if (project)    pools = pools.filter(p => (p.project || '').toLowerCase().includes(project.toLowerCase()));
             if (stableOnly) pools = pools.filter(p => p.stablecoin === true);
 
-            // Only pools with meaningful TVL
             pools = pools.filter(p => (p.tvlUsd || 0) > 10_000 && (p.apy || 0) > 0);
             pools.sort((a, b) => (b.tvlUsd || 0) - (a.tvlUsd || 0));
 
@@ -260,7 +239,6 @@ class DefiLlamaService {
         }
     }
 
-    /** Top yields by APY on a chain */
     async getTopYieldsByChain(chain, limit = 15) {
         try {
             const data = await this.cached('yields', 180_000, () =>
@@ -330,9 +308,8 @@ class DefiLlamaService {
         });
     }
 
-    // ─── Compound queries (used by AI agent) ─────
+    // ─── Compound queries ────────────────────────
 
-    /** Full ecosystem overview for a chain */
     async chainOverview(chain) {
         const [tvl, protos, yields] = await Promise.all([
             this.getChainTVL(chain),
@@ -342,7 +319,6 @@ class DefiLlamaService {
         return { ok: true, chain, tvl, protocols: protos, yields, ts: new Date().toISOString() };
     }
 
-    /** Compare chains side-by-side */
     async compareChains(names) {
         const allChains = await this.getChainsTVL();
         const results = {};
