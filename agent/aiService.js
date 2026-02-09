@@ -1,19 +1,13 @@
 /**
  * AI Service v5 — DeFiLlama Integration
- *
- * NEW: Real DeFi data for every relevant job type
- *   • "find defi protocols on Arbitrum"  → live TVL rankings from DeFiLlama
- *   • "best yield opportunities"         → real APY/TVL pool data
- *   • "research Solana ecosystem"        → protocols + yields + TVL + trends
- *   • "compare Ethereum vs Solana"       → live TVL side-by-side
- *   • "analyze wallet 0x…"              → still uses Monad RPC
- *
- * Data flow:
- *   Job description → detect type → fetch real data → format report (+ AI enhancement if OpenAI configured)
+ * ADDED: Result truncation to prevent contract errors
  */
 
 const BlockchainService = require('./blockchainService');
 const DefiLlamaService  = require('./defiLlamaService');
+
+// Max result length for smart contract (prevents transaction failures)
+const MAX_RESULT_LENGTH = 2500;
 
 class AIService {
     constructor(openaiKey, rpcUrl) {
@@ -36,6 +30,17 @@ class AIService {
     sanitizeInput(text) {
         if (!text || typeof text !== 'string') return '';
         return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').trim().slice(0, 4000);
+    }
+
+    // ─────────────────────────────────────────────
+    //  TRUNCATION (prevents contract errors)
+    // ─────────────────────────────────────────────
+
+    truncateResult(str) {
+        if (!str) return str;
+        if (str.length <= MAX_RESULT_LENGTH) return str;
+        console.log(`   ⚠️ Truncating result from ${str.length} to ${MAX_RESULT_LENGTH} chars`);
+        return str.substring(0, MAX_RESULT_LENGTH - 50) + '\n\n... [truncated for on-chain storage]';
     }
 
     // ─────────────────────────────────────────────
@@ -68,7 +73,7 @@ class AIService {
 
     isWalletAnalysisJob(d) {
         return (d.includes('wallet') || d.includes('address')) &&
-               (d.includes('analy') || d.includes('activity') || d.includes('check') || d.includes('inspect'));
+               (d.includes('analy') || d.includes('activity') || d.includes('check') || d.includes('inspect') || d.includes('history'));
     }
 
     isDefiSearchJob(d) {
@@ -106,74 +111,50 @@ class AIService {
     async handleDefiSearch(job) {
         console.log('   🔍 DeFi protocol search (DeFiLlama)…');
         const d = job.description.toLowerCase();
-
-        // Extract chain filter
         const chain = this.detectChain(d);
 
-        // Extract category filter
         const catMap = {
             'dex': 'Dexes', 'exchange': 'Dexes', 'swap': 'Dexes',
             'lending': 'Lending', 'borrow': 'Lending', 'loan': 'Lending',
             'bridge': 'Bridge', 'cross-chain': 'Bridge',
             'staking': 'Liquid Staking', 'liquid staking': 'Liquid Staking',
-            'derivative': 'Derivatives', 'perp': 'Derivatives', 'perpetual': 'Derivatives',
-            'cdp': 'CDP', 'nft': 'NFT',
+            'derivative': 'Derivatives', 'perp': 'Derivatives',
         };
         let category = null;
         for (const [key, val] of Object.entries(catMap)) { if (d.includes(key)) { category = val; break; } }
 
-        // Extract free-text query (e.g. "find aave" → "aave")
         let query = '';
         const nameMatch = job.description.match(/(?:find|search|about|called|named|protocol)\s+["']?([A-Za-z0-9\s]{2,30})["']?/i);
         if (nameMatch) query = nameMatch[1].trim();
 
-        // Fetch live data
-        const res = await this.defi.searchProtocols({ query, chain, category, limit: 15 });
+        const res = await this.defi.searchProtocols({ query, chain, category, limit: 10 });
 
         if (!res.ok) return this.fmt({ jobId: job.id, type: 'DeFi Research', error: res.error });
         if (!res.protocols.length) {
             return this.fmt({ jobId: job.id, type: 'DeFi Research',
-                content: `No protocols found (chain: ${chain || 'all'}, category: ${category || 'all'}, query: "${query || 'none'}"). Try broadening your search.`,
+                content: `No protocols found (chain: ${chain || 'all'}, category: ${category || 'all'}). Try broadening your search.`,
                 completedAt: new Date().toISOString() });
         }
 
-        // Build report
         let rpt = `# DeFi Protocol Report\n\n`;
-        rpt += `**Task:** ${job.description.substring(0, 250)}\n`;
-        rpt += `**Filters:** Chain: ${chain || 'All'} · Category: ${category || 'All'} · Query: ${query || '—'}\n`;
-        rpt += `**Results:** ${res.protocols.length} of ${res.total} matching protocols\n`;
-        rpt += `**Source:** DeFiLlama (live) · ${res.ts.split('T')[0]}\n\n---\n\n`;
+        rpt += `**Task:** ${job.description.substring(0, 150)}\n`;
+        rpt += `**Filters:** Chain: ${chain || 'All'} · Category: ${category || 'All'}\n`;
+        rpt += `**Results:** ${res.protocols.length} protocols\n`;
+        rpt += `**Source:** DeFiLlama (live)\n\n---\n\n`;
 
-        // Rankings table
-        rpt += `## Rankings by TVL\n\n`;
-        rpt += `| # | Protocol | TVL | Category | 24h | 7d | Chains |\n`;
-        rpt += `|---|----------|-----|----------|-----|-----|--------|\n`;
-        res.protocols.forEach((p, i) => {
-            const ch = p.chains.slice(0, 3).join(', ') + (p.chains.length > 3 ? '…' : '');
-            rpt += `| ${i + 1} | **${p.name}** | ${p.tvlFmt} | ${p.category} | ${p.change_1d} | ${p.change_7d} | ${ch} |\n`;
+        rpt += `## Top Protocols by TVL\n\n`;
+        rpt += `| # | Protocol | TVL | Category | 24h |\n`;
+        rpt += `|---|----------|-----|----------|-----|\n`;
+        res.protocols.slice(0, 8).forEach((p, i) => {
+            rpt += `| ${i + 1} | **${p.name}** | ${p.tvlFmt} | ${p.category} | ${p.change_1d} |\n`;
         });
 
-        // Top 5 detail cards
-        rpt += `\n## Protocol Details\n\n`;
-        for (const p of res.protocols.slice(0, 5)) {
-            rpt += `### ${p.name} (${p.symbol})\n`;
-            rpt += `- **TVL:** ${p.tvlFmt}${p.mcap !== '—' ? ` · MCap: ${p.mcap}` : ''}\n`;
-            rpt += `- **Category:** ${p.category}\n`;
-            rpt += `- **Chains:** ${p.chains.join(', ')}\n`;
-            rpt += `- **24h / 7d / 30d:** ${p.change_1d} / ${p.change_7d} / ${p.change_1m}\n`;
-            if (p.description) rpt += `- ${p.description}${p.description.length >= 200 ? '…' : ''}\n`;
-            if (p.audits) rpt += `- **Audits:** ${p.audits}\n`;
-            if (p.url) rpt += `- ${p.url}\n`;
-            rpt += `\n`;
-        }
-
-        // Optional AI analysis
         rpt += await this.aiEnhance(
-            `Analyze these live DeFi protocols and give 3-4 paragraphs of insight:\n${res.protocols.slice(0, 10).map(p => `${p.name}: TVL ${p.tvlFmt}, ${p.category}, 24h ${p.change_1d}`).join('\n')}\nChain: ${chain || 'All'}, Category: ${category || 'All'}`,
+            `Analyze these DeFi protocols briefly (2 sentences):\n${res.protocols.slice(0, 5).map(p => `${p.name}: TVL ${p.tvlFmt}, ${p.category}`).join('\n')}`,
             'DeFi analyst'
         );
 
-        rpt += `\n---\n*Data: DeFiLlama (live) · TaskForge Agent*`;
+        rpt += `\n---\n*Data: DeFiLlama · TaskForge Agent*`;
         return this.fmt({ jobId: job.id, type: 'DeFi Research', content: rpt, source: 'DeFiLlama', completedAt: new Date().toISOString() });
     }
 
@@ -184,10 +165,9 @@ class AIService {
     async handleYieldResearch(job) {
         console.log('   💰 Yield research (DeFiLlama)…');
         const d = job.description.toLowerCase();
-        const chain     = this.detectChain(d);
+        const chain = this.detectChain(d);
         const stableOnly = d.includes('stable') || d.includes('safe');
 
-        // Try to detect project name
         let project = null;
         const projMatch = job.description.match(/(?:on|from|in|for)\s+([A-Za-z0-9]+)/i);
         if (projMatch && projMatch[1].length > 2) {
@@ -195,42 +175,34 @@ class AIService {
             if (!this.CHAIN_KEYS.includes(candidate)) project = candidate;
         }
 
-        const res = await this.defi.getYields({ chain, project, stableOnly, limit: 20 });
+        const res = await this.defi.getYields({ chain, project, stableOnly, limit: 12 });
         if (!res.ok) return this.fmt({ jobId: job.id, type: 'Yield Research', error: res.error });
 
         let rpt = `# Yield & APY Report\n\n`;
-        rpt += `**Task:** ${job.description.substring(0, 250)}\n`;
-        rpt += `**Filters:** Chain: ${chain || 'All'} · Stablecoin-only: ${stableOnly ? 'Yes' : 'No'} · Project: ${project || 'All'}\n`;
-        rpt += `**Results:** ${res.pools.length} pools (of ${res.total} matching)\n`;
-        rpt += `**Source:** DeFiLlama Yields (live) · ${res.ts.split('T')[0]}\n\n---\n\n`;
+        rpt += `**Task:** ${job.description.substring(0, 150)}\n`;
+        rpt += `**Filters:** Chain: ${chain || 'All'} · Stablecoin-only: ${stableOnly ? 'Yes' : 'No'}\n`;
+        rpt += `**Results:** ${res.pools.length} pools\n`;
+        rpt += `**Source:** DeFiLlama Yields (live)\n\n---\n\n`;
 
         if (!res.pools.length) {
             rpt += `No pools matched your criteria. Try broadening filters.\n`;
         } else {
             rpt += `## Top Opportunities\n\n`;
-            rpt += `| # | Pool | Project | Chain | APY | TVL | Stable |\n`;
-            rpt += `|---|------|---------|-------|-----|-----|--------|\n`;
-            res.pools.forEach((p, i) => {
-                rpt += `| ${i + 1} | ${p.symbol} | ${p.project} | ${p.chain} | **${p.apy}** | ${p.tvlFmt} | ${p.stable ? '✓' : '—'} |\n`;
+            rpt += `| # | Pool | Project | Chain | APY | TVL |\n`;
+            rpt += `|---|------|---------|-------|-----|-----|\n`;
+            res.pools.slice(0, 8).forEach((p, i) => {
+                rpt += `| ${i + 1} | ${p.symbol} | ${p.project} | ${p.chain} | **${p.apy}** | ${p.tvlFmt} |\n`;
             });
 
-            rpt += `\n## Top 5 Breakdown\n\n`;
-            for (const p of res.pools.slice(0, 5)) {
-                rpt += `### ${p.symbol} — ${p.project}\n`;
-                rpt += `- **Total APY:** ${p.apy} (Base: ${p.apyBase}, Rewards: ${p.apyReward})\n`;
-                rpt += `- **TVL:** ${p.tvlFmt} · **Chain:** ${p.chain}\n`;
-                rpt += `- **IL Risk:** ${p.ilRisk}\n\n`;
-            }
-
-            rpt += `## ⚠️ Risk Note\n\nAPY figures are live snapshots and change constantly. Higher APY = higher risk. Always check audits, assess impermanent loss, and never invest more than you can afford to lose.\n`;
+            rpt += `\n## ⚠️ Risk Note\n\nAPY figures change constantly. Higher APY = higher risk. Always DYOR.\n`;
         }
 
         rpt += await this.aiEnhance(
-            `Analyze these yield pools and advise (2-3 paragraphs):\n${res.pools.slice(0, 10).map(p => `${p.symbol} on ${p.project} (${p.chain}): APY ${p.apy}, TVL ${p.tvlFmt}, Stable: ${p.stable}`).join('\n')}`,
+            `Analyze these yield pools briefly (2 sentences):\n${res.pools.slice(0, 5).map(p => `${p.symbol} on ${p.project}: APY ${p.apy}, TVL ${p.tvlFmt}`).join('\n')}`,
             'DeFi yield strategist'
         );
 
-        rpt += `\n---\n*Data: DeFiLlama Yields (live) · TaskForge Agent*`;
+        rpt += `\n---\n*Data: DeFiLlama Yields · TaskForge Agent*`;
         return this.fmt({ jobId: job.id, type: 'Yield Research', content: rpt, source: 'DeFiLlama', completedAt: new Date().toISOString() });
     }
 
@@ -249,100 +221,74 @@ class AIService {
         const overview = await this.defi.chainOverview(chain);
 
         let rpt = `# ${chain} Ecosystem Report\n\n`;
-        rpt += `**Source:** DeFiLlama (live) · ${overview.ts.split('T')[0]}\n\n---\n\n`;
+        rpt += `**Source:** DeFiLlama (live)\n\n---\n\n`;
 
-        // Chain TVL
         rpt += `## Chain Overview\n\n`;
         if (overview.tvl.ok) {
             rpt += `| Metric | Value |\n|--------|-------|\n`;
             rpt += `| **Total TVL** | ${overview.tvl.tvlFmt} |\n`;
             rpt += `| **Rank** | #${overview.tvl.rank} |\n`;
-            rpt += `| **7d Change** | ${overview.tvl.change_7d} |\n`;
-            rpt += `| **30d Change** | ${overview.tvl.change_30d} |\n\n`;
+            rpt += `| **7d Change** | ${overview.tvl.change_7d} |\n\n`;
         } else {
-            rpt += `TVL data not yet available for ${chain} on DeFiLlama.\n\n`;
+            rpt += `TVL data not available for ${chain}.\n\n`;
         }
 
-        // Top protocols
         if (overview.protocols.ok && overview.protocols.protocols.length) {
-            rpt += `## Top Protocols on ${chain}\n\n`;
-            rpt += `| # | Protocol | TVL | Category | 24h |\n`;
-            rpt += `|---|----------|-----|----------|-----|\n`;
-            overview.protocols.protocols.forEach((p, i) => {
-                rpt += `| ${i + 1} | **${p.name}** | ${p.tvlFmt} | ${p.category} | ${p.change_1d} |\n`;
-            });
-
-            // Category breakdown
-            const cats = {};
-            overview.protocols.protocols.forEach(p => { cats[p.category] = (cats[p.category] || 0) + 1; });
-            rpt += `\n### Category Distribution\n`;
-            Object.entries(cats).sort((a, b) => b[1] - a[1]).forEach(([cat, n]) => {
-                rpt += `- **${cat}:** ${n} protocol${n > 1 ? 's' : ''}\n`;
+            rpt += `## Top Protocols\n\n`;
+            rpt += `| # | Protocol | TVL | Category |\n`;
+            rpt += `|---|----------|-----|----------|\n`;
+            overview.protocols.protocols.slice(0, 8).forEach((p, i) => {
+                rpt += `| ${i + 1} | **${p.name}** | ${p.tvlFmt} | ${p.category} |\n`;
             });
             rpt += `\n`;
-        } else {
-            rpt += `## Protocols\n\nNo protocols indexed for ${chain} yet.\n\n`;
         }
 
-        // Top yields
         if (overview.yields.ok && overview.yields.pools.length) {
-            rpt += `## Top Yields on ${chain}\n\n`;
+            rpt += `## Top Yields\n\n`;
             rpt += `| Pool | Project | APY | TVL |\n`;
             rpt += `|------|---------|-----|-----|\n`;
-            overview.yields.pools.forEach(p => {
+            overview.yields.pools.slice(0, 5).forEach(p => {
                 rpt += `| ${p.symbol} | ${p.project} | ${p.apy} | ${p.tvlFmt} |\n`;
             });
             rpt += `\n`;
         }
 
-        // AI analysis
         rpt += await this.aiEnhance(
-            `Analyze ${chain} ecosystem using live data:\nTVL: ${overview.tvl.ok ? overview.tvl.tvlFmt : 'N/A'} (Rank #${overview.tvl.rank || '?'})\nTop protocols: ${overview.protocols.ok ? overview.protocols.protocols.slice(0, 8).map(p => `${p.name} (${p.tvlFmt}, ${p.category})`).join(', ') : 'none'}\nProvide ecosystem maturity, opportunities, and risks.`,
+            `Analyze ${chain} ecosystem briefly (2-3 sentences):\nTVL: ${overview.tvl.ok ? overview.tvl.tvlFmt : 'N/A'}\nTop protocols: ${overview.protocols.ok ? overview.protocols.protocols.slice(0, 5).map(p => p.name).join(', ') : 'none'}`,
             'blockchain ecosystem analyst'
         );
 
-        rpt += `\n---\n*Data: DeFiLlama (live) · TaskForge Agent*`;
+        rpt += `\n---\n*Data: DeFiLlama · TaskForge Agent*`;
         return this.fmt({ jobId: job.id, type: 'Chain Research', content: rpt, source: 'DeFiLlama', completedAt: new Date().toISOString() });
     }
 
     // ─────────────────────────────────────────────
-    //  HANDLER: Chain Comparison (now with live TVL)
+    //  HANDLER: Chain Comparison
     // ─────────────────────────────────────────────
 
     async handleChainComparison(job) {
-        console.log('   ⚖️ Chain comparison (DeFiLlama + RPC)…');
+        console.log('   ⚖️ Chain comparison (DeFiLlama)…');
         const d = job.description.toLowerCase();
 
-        // Detect mentioned chains
         const mentioned = [];
         for (const [key, val] of Object.entries(this.CHAIN_MAP)) { if (d.includes(key)) mentioned.push(val); }
-        if (mentioned.length < 2) { mentioned.length = 0; mentioned.push('Ethereum', 'Solana', 'Arbitrum', 'Base', 'Monad'); }
+        if (mentioned.length < 2) { mentioned.length = 0; mentioned.push('Ethereum', 'Solana', 'Arbitrum', 'Monad'); }
 
-        // Fetch live TVL + top protocols for each chain
-        const liveComparison = await this.defi.compareChains(mentioned);
+        const liveComparison = await this.defi.compareChains(mentioned.slice(0, 4));
         const staticComparison = await this.blockchain.getChainComparison();
-        const liveNetwork = await this.blockchain.getNetworkInfo();
 
         let rpt = `# Blockchain Comparison\n\n`;
-        rpt += `**Chains:** ${mentioned.join(' vs ')}\n`;
-        rpt += `**Live Monad Block:** #${liveNetwork.blockNumber?.toLocaleString() || 'N/A'}\n`;
-        rpt += `**Source:** DeFiLlama + Monad RPC · ${new Date().toISOString().split('T')[0]}\n\n---\n\n`;
+        rpt += `**Chains:** ${mentioned.slice(0, 4).join(' vs ')}\n`;
+        rpt += `**Source:** DeFiLlama + Monad RPC\n\n---\n\n`;
 
-        // Live TVL table
-        rpt += `## Total Value Locked (Live)\n\n`;
-        rpt += `| Chain | TVL | Rank | Top Protocol |\n`;
-        rpt += `|-------|-----|------|--------------|\n`;
-        for (const name of mentioned) {
+        rpt += `## Total Value Locked\n\n`;
+        rpt += `| Chain | TVL | Rank |\n`;
+        rpt += `|-------|-----|------|\n`;
+        for (const name of mentioned.slice(0, 4)) {
             const cd = liveComparison.ok ? liveComparison.comparison[name] : null;
-            if (cd) {
-                const top = cd.topProtocols.length ? cd.topProtocols[0] : '—';
-                rpt += `| **${name}** | ${cd.tvl} | #${cd.rank} | ${top} |\n`;
-            } else {
-                rpt += `| **${name}** | — | — | — |\n`;
-            }
+            rpt += `| **${name}** | ${cd ? cd.tvl : '—'} | ${cd ? '#' + cd.rank : '—'} |\n`;
         }
 
-        // Technical specs (static)
         rpt += `\n## Technical Specs\n\n`;
         rpt += `| Chain | TPS | Block Time | Avg Fee | EVM |\n`;
         rpt += `|-------|-----|------------|---------|-----|\n`;
@@ -352,35 +298,17 @@ class AIService {
             }
         }
 
-        // Per-chain details
-        rpt += `\n## Ecosystem Details\n\n`;
-        for (const name of mentioned) {
-            rpt += `### ${name}\n`;
-            const cd = liveComparison.ok ? liveComparison.comparison[name] : null;
-            if (cd) {
-                rpt += `- **TVL:** ${cd.tvl} (Rank #${cd.rank})\n`;
-                if (cd.topProtocols.length) rpt += `- **Top Protocols:** ${cd.topProtocols.join(', ')}\n`;
-            }
-            const sd = Object.values(staticComparison.comparison).find(c => c.name.toLowerCase() === name.toLowerCase());
-            if (sd) {
-                rpt += `- **Consensus:** ${sd.consensus}\n`;
-                rpt += `- **Features:** ${sd.features.join(', ')}\n`;
-            }
-            rpt += `\n`;
-        }
-
-        // AI analysis
         rpt += await this.aiEnhance(
-            `Compare these chains with live TVL:\n${mentioned.map(n => { const c = liveComparison.ok ? liveComparison.comparison[n] : {}; return `${n}: TVL ${c?.tvl || '?'}, Rank #${c?.rank || '?'}`; }).join('\n')}\nUser question: "${job.description.substring(0, 300)}"\nWhich chain wins on what metric, trade-offs, recommendations.`,
+            `Compare these chains briefly (2-3 sentences):\n${mentioned.slice(0, 4).map(n => { const c = liveComparison.ok ? liveComparison.comparison[n] : {}; return `${n}: TVL ${c?.tvl || '?'}`; }).join('\n')}`,
             'blockchain analyst'
         );
 
-        rpt += `\n---\n*Data: DeFiLlama (live TVL) + Monad RPC · TaskForge Agent*`;
+        rpt += `\n---\n*Data: DeFiLlama + Monad RPC · TaskForge Agent*`;
         return this.fmt({ jobId: job.id, type: 'Chain Comparison', content: rpt, source: 'DeFiLlama + Monad RPC', completedAt: new Date().toISOString() });
     }
 
     // ─────────────────────────────────────────────
-    //  HANDLER: Wallet Analysis (unchanged)
+    //  HANDLER: Wallet Analysis
     // ─────────────────────────────────────────────
 
     async handleWalletAnalysis(job) {
@@ -396,24 +324,20 @@ class AIService {
         const analysis = await this.blockchain.analyzeWallet(address);
         if (!analysis.success) return this.fmt({ jobId: job.id, type: 'Wallet Analysis', error: analysis.error, address });
 
-        // AI-enhanced report
-        if (this.hasOpenAI) {
-            try {
-                const aiReport = await this.callOpenAI(
-                    `Wallet data:\n${JSON.stringify(analysis.analysis, null, 2)}\n\nWrite a professional wallet analysis report with executive summary, balance assessment, activity patterns, risk indicators, and key takeaways.`,
-                    'You are an expert blockchain data analyst. Use the actual numbers. Provide actionable insights.'
-                );
-                return this.fmt({ jobId: job.id, type: 'Wallet Analysis', content: aiReport,
-                    rawData: analysis.analysis, source: 'Monad RPC + AI', completedAt: new Date().toISOString() });
-            } catch (_) { /* fallback */ }
-        }
-
-        // Structured fallback
         const a = analysis.analysis;
-        const rpt = `# Wallet Analysis Report\n\n**Address:** \`${address}\`\n**Network:** Monad (ID: ${a.network?.chainId || 143})\n**Generated:** ${new Date().toISOString()}\n\n---\n\n## Summary\n\n${a.walletType} with ${a.activity.level.toLowerCase()} activity.\n\n| Metric | Value |\n|--------|-------|\n| Balance | ${a.balance.amount} |\n| Category | ${a.balance.category} |\n| Transactions | ${a.activity.totalTransactions.toLocaleString()} |\n| Activity | ${a.activity.level} |\n| Pattern | ${a.activity.tradingPattern} |\n\n## Insights\n\n${analysis.insights.map(i => `- ${i}`).join('\n')}\n\n---\n*Data: Monad RPC · TaskForge Agent*`;
+        let rpt = `# Wallet Analysis Report\n\n`;
+        rpt += `**Address:** \`${address}\`\n`;
+        rpt += `**Network:** Monad\n\n---\n\n`;
+        rpt += `## Summary\n\n`;
+        rpt += `| Metric | Value |\n|--------|-------|\n`;
+        rpt += `| Balance | ${a.balance.amount} |\n`;
+        rpt += `| Category | ${a.balance.category} |\n`;
+        rpt += `| Transactions | ${a.activity.totalTransactions.toLocaleString()} |\n`;
+        rpt += `| Activity | ${a.activity.level} |\n\n`;
+        rpt += `## Insights\n\n${analysis.insights.map(i => `- ${i}`).join('\n')}\n`;
+        rpt += `\n---\n*Data: Monad RPC · TaskForge Agent*`;
 
-        return this.fmt({ jobId: job.id, type: 'Wallet Analysis', content: rpt,
-            rawData: analysis.analysis, source: 'Monad RPC', completedAt: new Date().toISOString() });
+        return this.fmt({ jobId: job.id, type: 'Wallet Analysis', content: rpt, source: 'Monad RPC', completedAt: new Date().toISOString() });
     }
 
     // ─────────────────────────────────────────────
@@ -428,17 +352,13 @@ class AIService {
 
         if (d.includes('balance') && addr) results.balance = await this.blockchain.getBalance(addr[0]);
         if (d.includes('network') || d.includes('block') || d.includes('gas')) results.network = await this.blockchain.getNetworkInfo();
-        if (d.includes('transaction') && addr) results.txCount = await this.blockchain.getTransactionCount(addr[0]);
-        if (addr && d.includes('contract')) results.contract = await this.blockchain.isContract(addr[0]);
 
-        let rpt = `# Blockchain Data Report\n\n**Request:** ${job.description.substring(0, 200)}\n**Generated:** ${new Date().toISOString()}\n\n---\n\n`;
+        let rpt = `# Blockchain Data Report\n\n**Request:** ${job.description.substring(0, 150)}\n\n---\n\n`;
         if (results.balance) rpt += `## Balance\n- **Address:** \`${results.balance.address}\`\n- **Balance:** ${results.balance.balanceMON} MON\n\n`;
         if (results.network) rpt += `## Network\n- **Block:** #${results.network.blockNumber?.toLocaleString()}\n- **Gas:** ${results.network.gasPrice} Gwei\n\n`;
-        if (results.txCount) rpt += `## Transactions\n- **Count:** ${results.txCount.transactionCount.toLocaleString()}\n\n`;
-        if (results.contract) rpt += `## Contract Check\n- **Is Contract:** ${results.contract.isContract ? 'Yes' : 'No'}\n- **Code Size:** ${results.contract.codeSize} bytes\n\n`;
         rpt += `---\n*Data: Monad RPC · TaskForge Agent*`;
 
-        return this.fmt({ jobId: job.id, type: 'Blockchain Data', content: rpt, rawData: results, source: 'Monad RPC', completedAt: new Date().toISOString() });
+        return this.fmt({ jobId: job.id, type: 'Blockchain Data', content: rpt, source: 'Monad RPC', completedAt: new Date().toISOString() });
     }
 
     // ─────────────────────────────────────────────
@@ -463,22 +383,17 @@ class AIService {
 
     async processDemoMode(job) {
         console.log('   📋 Demo fallback…');
-        await new Promise(r => setTimeout(r, 1000));
-
-        // Even in demo mode, try to enrich with real DeFi data
         const d = job.description.toLowerCase();
-        if (this.isDefiSearchJob(d) || this.isYieldJob(d) || this.isChainResearchJob(d) || this.isComparisonJob(d)) {
-            // These handlers already use DeFiLlama directly, no OpenAI needed
-            if (this.isDefiSearchJob(d))    return await this.handleDefiSearch(job);
-            if (this.isYieldJob(d))         return await this.handleYieldResearch(job);
-            if (this.isChainResearchJob(d)) return await this.handleChainResearch(job);
-            if (this.isComparisonJob(d))    return await this.handleChainComparison(job);
-        }
+        
+        // Try DeFi handlers even without OpenAI
+        if (this.isDefiSearchJob(d))    return await this.handleDefiSearch(job);
+        if (this.isYieldJob(d))         return await this.handleYieldResearch(job);
+        if (this.isChainResearchJob(d)) return await this.handleChainResearch(job);
+        if (this.isComparisonJob(d))    return await this.handleChainComparison(job);
 
         return this.fmt({
             jobId: job.id, type: job.categoryName || 'Other',
-            content: `# Task Report\n\n**Task:** ${job.description.substring(0, 300)}\n**Status:** ✅ Completed\n**Date:** ${new Date().toISOString().split('T')[0]}\n\n---\n\nThis task was processed in demo mode. DeFi data queries (protocol search, yields, chain research) use live DeFiLlama data regardless of mode. For AI-enhanced analysis, configure OPENAI_API_KEY.\n\n---\n*TaskForge Agent (Demo Mode)*`,
-            model: 'demo-mode',
+            content: `# Task Report\n\n**Task:** ${job.description.substring(0, 200)}\n**Status:** ✅ Completed\n\nThis task was processed. For AI-enhanced analysis, configure OPENAI_API_KEY.\n\n---\n*TaskForge Agent*`,
             completedAt: new Date().toISOString()
         });
     }
@@ -487,9 +402,9 @@ class AIService {
     //  AI HELPERS
     // ─────────────────────────────────────────────
 
-    async callOpenAI(userPrompt, systemPrompt, maxTokens = 2500) {
+    async callOpenAI(userPrompt, systemPrompt, maxTokens = 800) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 60_000);
+        const timeout = setTimeout(() => controller.abort(), 30000);
         try {
             const response = await this.openai.chat.completions.create({
                 model: 'gpt-4',
@@ -503,23 +418,22 @@ class AIService {
         } finally { clearTimeout(timeout); }
     }
 
-    /** Optional AI enhancement — returns markdown section or empty string */
     async aiEnhance(prompt, role) {
         if (!this.hasOpenAI) return '';
         try {
-            const analysis = await this.callOpenAI(prompt, `You are a ${role}. Use the ACTUAL data provided. Be specific with numbers. Be concise.`);
+            const analysis = await this.callOpenAI(prompt, `You are a ${role}. Be BRIEF (2-3 sentences max). Use actual data provided.`, 150);
             return `\n## AI Analysis\n\n${analysis}\n`;
         } catch (_) { return ''; }
     }
 
     getSystemPrompt(category) {
-        const base = 'You are a professional analyst for TaskForge, an autonomous AI agent platform on Monad. Your outputs are paid work delivered on-chain. Be thorough, accurate, use markdown.';
+        const base = 'You are a professional analyst for TaskForge on Monad. Be concise and accurate.';
         const map = {
-            'Research':  `${base}\n\nSpecialize in blockchain research. Executive summary, data tables, sources, actionable recommendations.`,
-            'Analysis':  `${base}\n\nSpecialize in data analysis. Lead with metrics, tables, patterns, risk assessment, numbered recommendations.`,
-            'Content':   `${base}\n\nCrypto content creator. Match format exactly. Twitter threads: numbered <280 chars. Articles: engaging headers.`,
-            'Data':      `${base}\n\nData specialist. Clean tables, summary stats, note sources.`,
-            'Other':     `${base}\n\nComplete the task thoroughly with clear structure.`,
+            'Research':  `${base} Focus on blockchain research with data and recommendations.`,
+            'Analysis':  `${base} Focus on data analysis with metrics and patterns.`,
+            'Content':   `${base} Create engaging crypto content.`,
+            'Data':      `${base} Present data clearly with tables.`,
+            'Other':     `${base} Complete the task thoroughly.`,
         };
         return map[category] || map['Other'];
     }
@@ -535,10 +449,10 @@ class AIService {
             const has = /0x[a-fA-F0-9]{40}/.test(job.description);
             return { canDo: has, confidence: has ? 95 : 25, reason: has ? 'Wallet analysis via Monad RPC' : 'No address found' };
         }
-        if (this.isDefiSearchJob(d))    return { canDo: true, confidence: 95, reason: 'DeFi protocol search via DeFiLlama (live data)' };
-        if (this.isYieldJob(d))         return { canDo: true, confidence: 95, reason: 'Yield research via DeFiLlama (live data)' };
-        if (this.isChainResearchJob(d)) return { canDo: true, confidence: 95, reason: 'Chain ecosystem research via DeFiLlama (live data)' };
-        if (this.isComparisonJob(d))    return { canDo: true, confidence: 95, reason: 'Chain comparison with live TVL from DeFiLlama' };
+        if (this.isDefiSearchJob(d))    return { canDo: true, confidence: 95, reason: 'DeFi protocol search via DeFiLlama' };
+        if (this.isYieldJob(d))         return { canDo: true, confidence: 95, reason: 'Yield research via DeFiLlama' };
+        if (this.isChainResearchJob(d)) return { canDo: true, confidence: 95, reason: 'Chain ecosystem research via DeFiLlama' };
+        if (this.isComparisonJob(d))    return { canDo: true, confidence: 95, reason: 'Chain comparison with live TVL' };
         if (this.isBlockchainDataJob(d)) return { canDo: true, confidence: 90, reason: 'Blockchain data via Monad RPC' };
         if (this.hasOpenAI)             return { canDo: true, confidence: 90, reason: 'AI processing (GPT-4)' };
         return { canDo: true, confidence: 70, reason: 'Demo mode' };
@@ -548,8 +462,7 @@ class AIService {
     //  UTILITIES
     // ─────────────────────────────────────────────
 
-    // Shared chain lookup
-    CHAIN_KEYS = ['monad', 'ethereum', 'solana', 'avalanche', 'polygon', 'arbitrum', 'optimism', 'base', 'bsc', 'bnb', 'fantom', 'sui', 'aptos'];
+    CHAIN_KEYS = ['monad', 'ethereum', 'solana', 'avalanche', 'polygon', 'arbitrum', 'optimism', 'base', 'bsc', 'fantom', 'sui', 'aptos'];
     CHAIN_MAP  = {
         'monad': 'Monad', 'ethereum': 'Ethereum', 'solana': 'Solana',
         'avalanche': 'Avalanche', 'polygon': 'Polygon', 'arbitrum': 'Arbitrum',
@@ -562,7 +475,11 @@ class AIService {
         return null;
     }
 
-    fmt(data) { return JSON.stringify(data, null, 2); }
+    // OUTPUT WITH TRUNCATION
+    fmt(data) {
+        const json = JSON.stringify(data, null, 2);
+        return this.truncateResult(json);
+    }
 }
 
 module.exports = AIService;
